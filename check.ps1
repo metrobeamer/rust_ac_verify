@@ -1,4 +1,4 @@
-$webhookUrl = "https://discord.com/api/webhooks/1407258124850827396/kkhtvS5us7fN17u9s89uicI8K8Yf29oE-KWmi39NEzVHvQ1DfNwLrZcAIKYhXZI5Vtbk"
+$webhookUrl = ""
 
 $tempFolder = "$env:TEMP\$(New-Guid)"
 
